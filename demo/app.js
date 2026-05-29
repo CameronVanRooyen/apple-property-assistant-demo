@@ -31,8 +31,6 @@ const PRETORIA_EAST = [
   "hatfield",
 ];
 
-const currencyFormatter = new Intl.NumberFormat("en-ZA");
-
 function parseCsv(text) {
   const rows = [];
   let row = [];
@@ -105,10 +103,16 @@ function formatBudget(value, intent) {
   if (!value) {
     return "";
   }
-  if (intent === "buy" && value >= 1000000) {
-    return `R${currencyFormatter.format(value)}`;
-  }
-  return `R${currencyFormatter.format(value)}${intent === "rent" ? " pm" : ""}`;
+  const amount = `R${Number(value).toLocaleString("en-US")}`;
+  return `${amount}${intent === "rent" ? " pm" : ""}`;
+}
+
+function displayArea(area) {
+  return String(area || "")
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
 }
 
 function parseRefs(text) {
@@ -263,29 +267,32 @@ function defaultReplies() {
   ]);
 }
 
-function citySummary(rows) {
-  const counts = new Map();
-  rows.forEach((row) => {
-    const key = row.city || "Unknown";
-    counts.set(key, (counts.get(key) || 0) + 1);
-  });
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 5)
-    .map(([city, count]) => `${city} (${count})`)
-    .join(", ");
+function cityList(rows) {
+  const cities = [...new Set(rows.map((row) => row.city).filter(Boolean))].sort();
+  if (!cities.length) {
+    return "";
+  }
+  if (cities.length <= 4) {
+    return cities.join(", ");
+  }
+  return `${cities.slice(0, 4).join(", ")}, and other areas`;
 }
 
 function coverageFor(area = "") {
   const query = normalise(area);
+  const areaLabel = displayArea(area);
   const scoped = query ? state.listings.filter((row) => hasArea(row, query)) : state.listings;
   const current = scoped.filter((row) => !isExcluded(row));
-  const rentCities = citySummary(current.filter((row) => row.intent === "rent"));
-  const buyCities = citySummary(current.filter((row) => row.intent === "buy"));
+  const rentals = current.filter((row) => row.intent === "rent");
+  const sales = current.filter((row) => row.intent === "buy");
+  const rentCities = cityList(rentals);
+  const buyCities = cityList(sales);
   if (query) {
-    return `For ${area}, I can see rentals in ${rentCities || "no visible rental areas"} and sales in ${buyCities || "no visible sales areas"}. Are you looking to rent or buy there?`;
+    const rentalPart = rentals.length === 1 ? "1 rental" : `${rentals.length} rentals`;
+    const salePart = sales.length === 1 ? "1 sale listing" : `${sales.length} sale listings`;
+    return `For ${areaLabel}, I can check ${rentals.length ? rentalPart : "no current rentals"} and ${sales.length ? salePart : "no current sale listings"}. Are you renting or buying there?`;
   }
-  return `The source is broader than Pretoria East. Rentals are visible in ${rentCities || "no visible rental areas"}. Sales are visible in ${buyCities || "no visible sales areas"}. Are you looking to rent or buy first?`;
+  return `I can check rentals in ${rentCities || "the current rental areas"} and buying options in ${buyCities || "the current sales areas"}. Are you renting or buying first?`;
 }
 
 function searchListings({ intent, area, budget, beds, type }) {
@@ -314,6 +321,32 @@ function searchListings({ intent, area, budget, beds, type }) {
     })
     .sort((a, b) => parseMoney(a.price) - parseMoney(b.price));
   return rows;
+}
+
+function availableRowsFor(intent, area) {
+  return state.listings
+    .filter((row) => row.intent === intent)
+    .filter((row) => !isExcluded(row))
+    .filter((row) => hasArea(row, area))
+    .sort((a, b) => parseMoney(a.price) - parseMoney(b.price));
+}
+
+function noMatchMessage(context) {
+  const area = context.area || "that area";
+  const areaLabel = displayArea(area);
+  const currentForIntent = availableRowsFor(context.intent, area);
+  if (context.intent === "rent" && currentForIntent.length && context.budget) {
+    const cheapest = currentForIntent[0];
+    return `I do not see a ${areaLabel} rental under ${formatBudget(context.budget, "rent")}. The only current ${areaLabel} rental I can see is ${cheapest.web_ref} in ${cheapest.suburb} at ${cheapest.price}, which is above that budget. I can send your requirement to an agent, or we can try another area.`;
+  }
+  if (context.intent === "rent" && !currentForIntent.length && context.salesOnly) {
+    return `I do not see current rentals in ${areaLabel}. I can send your ${areaLabel} rental requirement to an agent, or we can try an area with current rentals.`;
+  }
+  if (context.intent === "buy" && currentForIntent.length && context.budget) {
+    const cheapest = currentForIntent[0];
+    return `I do not see a ${areaLabel} buying option under ${formatBudget(context.budget, "buy")}. The lowest current option I can see is ${cheapest.web_ref} at ${cheapest.price}. I can pass your budget to an agent for follow-up.`;
+  }
+  return "I do not see an exact match with those details. I can send the requirement to an agent for follow-up.";
 }
 
 function listingCard(row) {
@@ -348,14 +381,11 @@ function listingCard(row) {
 
 function showListings(rows, context) {
   if (!rows.length) {
-    const message = context.salesOnly
-      ? `I do not see a current rental match for ${context.area}. The source has sale or sold data there, so I will not present it as available rental stock. I can still prepare a requirement for agent follow-up.`
-      : "I do not see an exact current match in the source data. I can still prepare the requirement for an agent to follow up.";
-    addMessage("assistant", message);
+    addMessage("assistant", noMatchMessage(context));
     setQuickReplies([
-      { label: "Send to agent", prompt: `Please pass this ${context.intent || "property"} requirement to an agent` },
-      { label: "Try Pretoria East", prompt: "I want to rent in Pretoria East under R8000" },
-      { label: "Try Centurion", prompt: "I want to buy in Centurion under R2m" },
+      { label: "Send to agent", prompt: `Please send this ${context.intent || "property"} requirement to an agent` },
+      { label: "Pretoria East under R8k", prompt: "I want to rent in Pretoria East under R8000" },
+      { label: "Buy Centurion", prompt: "I want to buy in Centurion under R2m" },
     ]);
     return;
   }
@@ -363,7 +393,7 @@ function showListings(rows, context) {
   const stack = document.createElement("div");
   stack.className = "listing-stack";
   rows.slice(0, 3).forEach((row) => stack.append(listingCard(row)));
-  const intro = `I found ${rows.length} current ${context.intent === "rent" ? "rental" : "sale"} match${rows.length === 1 ? "" : "es"}. Here are the best options from the source data.`;
+  const intro = `I found ${rows.length} ${context.intent === "rent" ? "rental" : "buying"} match${rows.length === 1 ? "" : "es"}. Here are the best options.`;
   addMessage("assistant", intro, stack);
 
   const replies = [
@@ -565,9 +595,9 @@ function handlePrompt(text) {
     if (!area) {
       addMessage("assistant", intent === "rent" ? "Which area should I check first, and what is the maximum monthly rent?" : "Which city or suburb should I check first, and what purchase budget should I stay under?");
       setQuickReplies([
-        { label: "Pretoria East", prompt: `${intent} in Pretoria East under ${intent === "rent" ? "R8000" : "R2m"}` },
-        { label: "Centurion", prompt: `${intent} in Centurion under ${intent === "rent" ? "R10000" : "R2m"}` },
-        { label: "Hatfield", prompt: `${intent} in Hatfield under ${intent === "rent" ? "R9000" : "R1m"}` },
+        { label: intent === "rent" ? "Pretoria East under R8k" : "Pretoria under R2m", prompt: `${intent} in Pretoria East under ${intent === "rent" ? "R8000" : "R2m"}` },
+        { label: intent === "rent" ? "Centurion under R10k" : "Centurion under R2m", prompt: `${intent} in Centurion under ${intent === "rent" ? "R10000" : "R2m"}` },
+        { label: intent === "rent" ? "Hatfield under R9k" : "Hatfield under R1m", prompt: `${intent} in Hatfield under ${intent === "rent" ? "R9000" : "R1m"}` },
       ]);
       return;
     }
