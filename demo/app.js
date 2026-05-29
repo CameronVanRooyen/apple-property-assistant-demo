@@ -3,12 +3,12 @@ const state = {
   intent: "",
   includeRetirement: false,
   pendingViewingRef: "",
+  pendingRequirement: null,
 };
 
 const els = {
   listingCount: document.querySelector("#listingCount"),
   conversation: document.querySelector("#conversation"),
-  quickReplies: document.querySelector("#quickReplies"),
   askForm: document.querySelector("#askForm"),
   askInput: document.querySelector("#askInput"),
   note: document.querySelector("#assistantNote"),
@@ -121,17 +121,20 @@ function parseRefs(text) {
 
 function inferIntent(text) {
   const value = normalise(text);
-  if (/\b(to rent|rental|rent|let)\b/.test(value)) {
+  if (/\b(sell|seller|landlord|valuation|list my|let out|let my|letting out)\b/.test(value)) {
+    return "sell";
+  }
+  if (/\b(to rent|rental|rentals|rent|rents|let|to let)\b/.test(value)) {
     return "rent";
   }
   if (/\b(buy|sale|for sale|purchase)\b/.test(value)) {
     return "buy";
   }
+  if (/\br\s?\d+(?:\.\d+)?\s*m\b/.test(value)) {
+    return "buy";
+  }
   if (/\b(viewing|view|book|appointment)\b/.test(value)) {
     return "viewing";
-  }
-  if (/\b(sell|seller|landlord|valuation|list my|letting)\b/.test(value)) {
-    return "sell";
   }
   return state.intent;
 }
@@ -140,6 +143,7 @@ function inferArea(text) {
   const value = normalise(text);
   const known = [
     "pretoria east",
+    "pretoria",
     "centurion",
     "zwartkop",
     "faerie glen",
@@ -159,7 +163,7 @@ function inferArea(text) {
 
 function inferBeds(text) {
   const value = normalise(text);
-  const match = value.match(/(\d+(?:\.\d+)?)\s*(bed|bedroom)/);
+  const match = value.match(/(\d+(?:\.\d+)?)[\s-]*(bed|bedroom)/);
   return match ? match[1] : "";
 }
 
@@ -245,17 +249,28 @@ function addMessage(role, text, child) {
   if (role === "assistant" || role === "system") {
     els.note.textContent = text || "Response shown";
   }
+  return node;
 }
 
 function setQuickReplies(replies) {
-  els.quickReplies.innerHTML = "";
+  els.conversation.querySelectorAll(".inline-actions").forEach((node) => node.remove());
+  const targets = els.conversation.querySelectorAll(".message.assistant, .message.system");
+  const target = targets[targets.length - 1];
+  if (!target || !replies.length) {
+    return;
+  }
+  const actions = document.createElement("div");
+  actions.className = "inline-actions";
+  actions.setAttribute("aria-label", "Suggested replies");
   replies.forEach((reply) => {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = reply.label;
     button.dataset.prompt = reply.prompt;
-    els.quickReplies.append(button);
+    actions.append(button);
   });
+  target.append(actions);
+  els.conversation.scrollTop = els.conversation.scrollHeight;
 }
 
 function defaultReplies() {
@@ -293,6 +308,114 @@ function coverageFor(area = "") {
     return `For ${areaLabel}, I can check ${rentals.length ? rentalPart : "no current rentals"} and ${sales.length ? salePart : "no current sale listings"}. Are you renting or buying there?`;
   }
   return `I can check rentals in ${rentCities || "the current rental areas"} and buying options in ${buyCities || "the current sales areas"}. Are you renting or buying first?`;
+}
+
+function areaQuestion(intent) {
+  return intent === "rent"
+    ? "Which area should I check first for rentals?"
+    : "Which city or suburb should I check first for buying?";
+}
+
+function areaReplies(intent) {
+  const verb = intent === "rent" ? "rent" : "buy";
+  return [
+    { label: "Pretoria East", prompt: `${verb} in Pretoria East` },
+    { label: "Pretoria", prompt: `${verb} in Pretoria` },
+    { label: "Centurion", prompt: `${verb} in Centurion` },
+    { label: "Hatfield", prompt: `${verb} in Hatfield` },
+  ];
+}
+
+function budgetQuestion(intent, area) {
+  const areaLabel = displayArea(area);
+  return intent === "rent"
+    ? `I can help with rentals in ${areaLabel}. What monthly rent should I stay under?`
+    : `I can help with buying in ${areaLabel}. What purchase budget should I stay under?`;
+}
+
+function budgetReplies(intent, area) {
+  if (intent === "rent") {
+    return [
+      { label: "Under R8k", prompt: `rent in ${area} under R8000` },
+      { label: "Under R10k", prompt: `rent in ${area} under R10000` },
+      { label: "Under R15k", prompt: `rent in ${area} under R15000` },
+      { label: "Send to agent", prompt: `Please send my rental requirement in ${area} to an agent` },
+    ];
+  }
+  return [
+    { label: "Under R1.5m", prompt: `buy in ${area} under R1.5m` },
+    { label: "Under R2m", prompt: `buy in ${area} under R2m` },
+    { label: "Under R3m", prompt: `buy in ${area} under R3m` },
+    { label: "Send to agent", prompt: `Please send my buying requirement in ${area} to an agent` },
+  ];
+}
+
+function requirementFromText(text) {
+  return {
+    intent: inferIntent(text) || state.intent || "property",
+    area: inferArea(text),
+    budget: parseMoney(text),
+    beds: inferBeds(text),
+    type: inferType(text),
+  };
+}
+
+function describeRequirement(context) {
+  const parts = [];
+  if (context.intent && context.intent !== "property") {
+    parts.push(context.intent === "rent" ? "rental" : context.intent);
+  }
+  if (context.area) {
+    parts.push(`in ${displayArea(context.area)}`);
+  }
+  if (context.budget) {
+    parts.push(`under ${formatBudget(context.budget, context.intent)}`);
+  }
+  if (context.beds) {
+    parts.push(`${context.beds} bedroom`);
+  }
+  if (context.type) {
+    parts.push(context.type);
+  }
+  return parts.join(" ") || "property requirement";
+}
+
+function showRequirementCapture(context) {
+  state.pendingRequirement = context;
+  state.pendingViewingRef = "";
+  addMessage("assistant", `I can send this to an agent: ${describeRequirement(context)}. Please send your name and WhatsApp number or email, and I will prepare the handoff.`);
+  setQuickReplies([
+    { label: "Example contact", prompt: "My name is Cameron and my phone is 082 123 4567" },
+    { label: "Keep searching", prompt: state.intent === "buy" ? "I want to buy" : "I want to rent" },
+    { label: "Book viewing", prompt: "Book a viewing for AP17545" },
+  ]);
+}
+
+function showRequirementHandoff(lead) {
+  const context = state.pendingRequirement || {};
+  const summary = [
+    `Requirement: ${describeRequirement(context)}`,
+    `Visitor: ${lead.name || "Missing"}`,
+    `Contact: ${lead.contact || "Missing"}`,
+    "Status: ready for agent follow-up",
+  ].join("\n");
+  const card = document.createElement("div");
+  card.className = "handoff-card";
+  card.innerHTML = `
+    <strong>Lead ready for handoff</strong>
+    <pre>${escapeHtml(summary)}</pre>
+    <div class="handoff-actions">
+      <button type="button" data-action="copy" data-summary="${escapeAttr(summary)}">Copy</button>
+      <a class="primary" href="mailto:agent@vanrooyen.tech?subject=${encodeURIComponent("Apple Property search lead")}&body=${encodeURIComponent(summary)}">Email</a>
+    </div>
+  `;
+  state.pendingRequirement = null;
+  addMessage("assistant", "I have enough detail for an agent follow-up. The lead summary is ready to send.", card);
+  setQuickReplies([
+    { label: "New rental search", prompt: "I want to rent" },
+    { label: "New buyer search", prompt: "I want to buy" },
+    { label: "Seller lead", prompt: "I want to sell my property" },
+  ]);
 }
 
 function searchListings({ intent, area, budget, beds, type }) {
@@ -352,8 +475,12 @@ function noMatchMessage(context) {
 function listingCard(row) {
   const card = document.createElement("div");
   card.className = "listing-card";
+  const phone = firstMobile(row);
   const wa = whatsappFor(row);
   const tel = telFor(row);
+  const phoneMarkup = phone && wa
+    ? `<a href="${escapeAttr(wa)}" target="_blank" rel="noreferrer">${escapeHtml(phone)}</a>`
+    : escapeHtml(phone);
   card.innerHTML = `
     <div class="listing-head">
       <h2 class="listing-title">${escapeHtml(row.title)}</h2>
@@ -367,7 +494,7 @@ function listingCard(row) {
       <span class="pill">Available ${escapeHtml(row.availability || "Not stated")}</span>
       ${row.deposit ? `<span class="pill">Deposit ${escapeHtml(row.deposit)}</span>` : ""}
     </div>
-    <p class="agent-line">Agent: ${escapeHtml(row.agent || "Not stated")}</p>
+    <p class="agent-line">Agent: ${escapeHtml(row.agent || "Not stated")}${phoneMarkup ? ` · ${phoneMarkup}` : ""}</p>
     <div class="listing-actions">
       <a class="primary" href="${escapeAttr(row.url)}" target="_blank" rel="noreferrer">Open</a>
       <button type="button" data-action="details" data-ref="${escapeAttr(row.web_ref)}">Details</button>
@@ -381,9 +508,10 @@ function listingCard(row) {
 
 function showListings(rows, context) {
   if (!rows.length) {
+    const requirement = describeRequirement(context);
     addMessage("assistant", noMatchMessage(context));
     setQuickReplies([
-      { label: "Send to agent", prompt: `Please send this ${context.intent || "property"} requirement to an agent` },
+      { label: "Send to agent", prompt: `Please send this ${requirement} to an agent` },
       { label: "Pretoria East under R8k", prompt: "I want to rent in Pretoria East under R8000" },
       { label: "Buy Centurion", prompt: "I want to buy in Centurion under R2m" },
     ]);
@@ -410,7 +538,7 @@ function showListings(rows, context) {
 function showDetails(ref) {
   const row = listingByRef(ref);
   if (!row || isExcluded(row)) {
-    addMessage("assistant", `I do not see an available current listing for ${ref} in the validated source data.`);
+    addMessage("assistant", `I do not see a current available listing for ${ref}. I can ask an agent to check it if you share your contact details.`);
     return;
   }
   addMessage("assistant", `${row.web_ref}: ${row.title}. ${row.price}. ${row.suburb}, ${row.city}. Agent ${row.agent || "not stated"}.`, listingCard(row));
@@ -562,6 +690,16 @@ function handlePrompt(text) {
     }
   }
 
+  if (state.pendingRequirement && (value.includes("phone") || /\b0\d{2}\s?\d{3}\s?\d{4}\b/.test(value) || /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(text))) {
+    showRequirementHandoff(parseLead(text));
+    return;
+  }
+
+  if ((value.includes("send") || value.includes("pass") || value.includes("follow up")) && value.includes("agent") && !refs[0]) {
+    showRequirementCapture(requirementFromText(text));
+    return;
+  }
+
   if (refs.length >= 2 || value.startsWith("compare")) {
     showCompare(refs);
     return;
@@ -575,6 +713,7 @@ function handlePrompt(text) {
   const intent = inferIntent(text);
   if (intent === "sell") {
     state.intent = "sell";
+    state.pendingViewingRef = "";
     showSellerFlow();
     return;
   }
@@ -587,28 +726,21 @@ function handlePrompt(text) {
 
   if (intent === "rent" || intent === "buy") {
     state.intent = intent;
+    state.pendingViewingRef = "";
     const area = inferArea(text);
     const budget = parseMoney(text);
     const beds = inferBeds(text);
     const type = inferType(text);
 
     if (!area) {
-      addMessage("assistant", intent === "rent" ? "Which area should I check first, and what is the maximum monthly rent?" : "Which city or suburb should I check first, and what purchase budget should I stay under?");
-      setQuickReplies([
-        { label: intent === "rent" ? "Pretoria East under R8k" : "Pretoria under R2m", prompt: `${intent} in Pretoria East under ${intent === "rent" ? "R8000" : "R2m"}` },
-        { label: intent === "rent" ? "Centurion under R10k" : "Centurion under R2m", prompt: `${intent} in Centurion under ${intent === "rent" ? "R10000" : "R2m"}` },
-        { label: intent === "rent" ? "Hatfield under R9k" : "Hatfield under R1m", prompt: `${intent} in Hatfield under ${intent === "rent" ? "R9000" : "R1m"}` },
-      ]);
+      addMessage("assistant", areaQuestion(intent));
+      setQuickReplies(areaReplies(intent));
       return;
     }
 
     if (!budget && !beds && !type && !/\bunder\b/.test(value)) {
-      addMessage("assistant", coverageFor(area));
-      setQuickReplies([
-        { label: "Rent there", prompt: `rent in ${area} under R10000` },
-        { label: "Buy there", prompt: `buy in ${area} under R2m` },
-        { label: "Different area", prompt: "Any other areas besides Pretoria east?" },
-      ]);
+      addMessage("assistant", budgetQuestion(intent, area));
+      setQuickReplies(budgetReplies(intent, area));
       return;
     }
 
@@ -634,17 +766,15 @@ function bindEvents() {
     handlePrompt(text);
   });
 
-  els.quickReplies.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-prompt]");
-    if (!button) {
+  els.conversation.addEventListener("click", async (event) => {
+    const promptButton = event.target.closest("[data-prompt]");
+    if (promptButton) {
+      const prompt = promptButton.dataset.prompt;
+      addMessage("user", prompt);
+      handlePrompt(prompt);
       return;
     }
-    const prompt = button.dataset.prompt;
-    addMessage("user", prompt);
-    handlePrompt(prompt);
-  });
 
-  els.conversation.addEventListener("click", async (event) => {
     const action = event.target.closest("[data-action]");
     if (!action) {
       return;
