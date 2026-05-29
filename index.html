@@ -7,144 +7,29 @@
     <link rel="stylesheet" href="demo/styles.css">
   </head>
   <body>
-    <div class="app-shell">
-      <header class="topbar">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true">AP</div>
-          <div>
-            <h1>Apple Property Assistant</h1>
-            <p>Qualify buyers, renters, sellers, and viewing requests for human follow-up.</p>
+    <main class="chat-page">
+      <section class="chat-shell" aria-label="Apple Property Lead Assistant">
+        <header class="chat-header">
+          <div class="assistant-avatar" aria-hidden="true">AP</div>
+          <div class="assistant-title">
+            <h1>Apple Property Lead Assistant</h1>
+            <p>Listings, viewings, agent follow-up</p>
           </div>
-        </div>
-        <a class="source-link" href="https://m.appleproperty.co.za/" target="_blank" rel="noreferrer">Source site</a>
-      </header>
+          <span id="listingCount" class="listing-count">Loading</span>
+        </header>
 
-      <main class="assistant-layout">
-        <section class="conversation-panel" aria-label="Guided lead assistant">
-          <div class="assistant-header">
-            <div>
-              <span class="eyebrow">No-credit guided demo</span>
-              <h2>Qualify the lead first, then show listings</h2>
-              <p>Start with intent, ask one useful question at a time, and prepare an agent handoff when the visitor is ready.</p>
-            </div>
-            <strong id="listingCount">Loading</strong>
-          </div>
+        <div id="conversation" class="chat-feed" aria-live="polite"></div>
 
-          <div class="segment" role="group" aria-label="Intent">
-            <button class="segment-button active" type="button" data-intent="rent">Rent</button>
-            <button class="segment-button" type="button" data-intent="buy">Buy</button>
-            <button class="segment-button" type="button" data-intent="viewing">Viewing</button>
-            <button class="segment-button" type="button" data-intent="sell">Sell/Let</button>
-          </div>
+        <div id="quickReplies" class="quick-replies" aria-label="Suggested replies"></div>
 
-          <div id="conversation" class="conversation-feed" aria-live="polite"></div>
+        <form id="askForm" class="composer">
+          <input id="askInput" autocomplete="off" placeholder="Ask about rentals, buying, viewings, or Web Ref...">
+          <button type="submit" aria-label="Send">Send</button>
+        </form>
 
-          <div class="guided-actions" aria-label="Suggested next steps">
-            <button type="button" data-prompt="I want to rent in Pretoria East under R8000">Rent in Pretoria East</button>
-            <button type="button" data-prompt="I want to buy a 3 bedroom house in Centurion under R2m">Buy in Centurion</button>
-            <button type="button" data-prompt="Book a viewing for AP17545">Book AP17545</button>
-            <button type="button" data-prompt="I want to sell my property">Sell/let my property</button>
-          </div>
-
-          <form id="askForm" class="ask-row">
-            <input id="askInput" autocomplete="off" placeholder="Tell me what the visitor wants: area, budget, Web Ref...">
-            <button type="submit" aria-label="Ask">Send</button>
-          </form>
-
-          <div id="assistantNote" class="assistant-note" role="status"></div>
-
-          <section class="recommendations" aria-label="Assistant recommendations">
-            <div class="panel-title">
-              <span>Recommended next step</span>
-              <button id="clearCompare" class="quiet-button" type="button">Clear compare</button>
-            </div>
-            <div id="results" class="results-grid"></div>
-          </section>
-        </section>
-
-        <aside class="context-panel" aria-label="Lead handoff and source controls">
-          <section class="lead-panel">
-            <div class="panel-title">
-              <span>Lead Handoff</span>
-              <strong id="handoffStatus">Draft</strong>
-            </div>
-
-            <form id="leadForm" class="lead-form">
-              <label>
-                Web Ref
-                <input id="leadRef" name="webRef" autocomplete="off" placeholder="AP17545">
-              </label>
-              <label>
-                Name
-                <input id="leadName" name="name" autocomplete="name" placeholder="Visitor name">
-              </label>
-              <label>
-                Phone or email
-                <input id="leadContact" name="contact" autocomplete="tel email" placeholder="082... or email">
-              </label>
-              <label>
-                Preferred time
-                <input id="leadTime" name="time" autocomplete="off" placeholder="Tomorrow afternoon">
-              </label>
-              <label>
-                Notes
-                <textarea id="leadNotes" name="notes" rows="4" placeholder="Area, budget, bedrooms, question"></textarea>
-              </label>
-              <button class="primary-action" type="submit">Prepare handoff</button>
-            </form>
-
-            <div id="leadSummary" class="lead-summary"></div>
-            <div class="lead-actions">
-              <button id="copyLead" class="quiet-button" type="button">Copy summary</button>
-              <a id="emailLead" class="quiet-button" href="mailto:agent@vanrooyen.tech" target="_blank" rel="noreferrer">Email handoff</a>
-            </div>
-          </section>
-
-          <details class="tool-drawer">
-            <summary>Source data search controls</summary>
-            <form id="filterForm" class="filters">
-              <label>
-                Area
-                <input id="areaInput" name="area" autocomplete="off" placeholder="Pretoria East, Centurion, Faerie Glen">
-              </label>
-              <label>
-                Budget
-                <input id="budgetInput" name="budget" inputmode="numeric" placeholder="8000 or 2m">
-              </label>
-              <label>
-                Bedrooms
-                <input id="bedsInput" name="beds" inputmode="numeric" placeholder="1, 2, 3">
-              </label>
-              <label>
-                Type
-                <select id="typeInput" name="type">
-                  <option value="">Any</option>
-                  <option value="apartment">Apartment</option>
-                  <option value="flat">Flat</option>
-                  <option value="house">House</option>
-                  <option value="townhouse">Townhouse</option>
-                  <option value="garden cottage">Garden cottage</option>
-                </select>
-              </label>
-              <label class="check-row">
-                <input id="includeRetirement" name="includeRetirement" type="checkbox">
-                Include retirement listings
-              </label>
-              <button class="primary-action" type="submit">Check source data</button>
-            </form>
-
-            <div class="area-chips" aria-label="Common areas">
-              <button type="button" data-area="Pretoria East">Pretoria East</button>
-              <button type="button" data-area="Centurion">Centurion</button>
-              <button type="button" data-area="Faerie Glen">Faerie Glen</button>
-              <button type="button" data-area="Moreleta Park">Moreleta Park</button>
-              <button type="button" data-area="Hatfield">Hatfield</button>
-              <button type="button" data-area="Menlyn">Menlyn</button>
-            </div>
-          </details>
-        </aside>
-      </main>
-    </div>
+        <div id="assistantNote" class="status-line" role="status"></div>
+      </section>
+    </main>
 
     <script src="demo/app.js"></script>
   </body>

@@ -1,35 +1,17 @@
 const state = {
   listings: [],
-  intent: "rent",
-  selectedRefs: [],
-  lastResults: [],
+  intent: "",
   includeRetirement: false,
+  pendingViewingRef: "",
 };
 
 const els = {
   listingCount: document.querySelector("#listingCount"),
-  filterForm: document.querySelector("#filterForm"),
-  areaInput: document.querySelector("#areaInput"),
-  budgetInput: document.querySelector("#budgetInput"),
-  bedsInput: document.querySelector("#bedsInput"),
-  typeInput: document.querySelector("#typeInput"),
-  includeRetirement: document.querySelector("#includeRetirement"),
+  conversation: document.querySelector("#conversation"),
+  quickReplies: document.querySelector("#quickReplies"),
   askForm: document.querySelector("#askForm"),
   askInput: document.querySelector("#askInput"),
   note: document.querySelector("#assistantNote"),
-  conversation: document.querySelector("#conversation"),
-  results: document.querySelector("#results"),
-  clearCompare: document.querySelector("#clearCompare"),
-  leadForm: document.querySelector("#leadForm"),
-  leadRef: document.querySelector("#leadRef"),
-  leadName: document.querySelector("#leadName"),
-  leadContact: document.querySelector("#leadContact"),
-  leadTime: document.querySelector("#leadTime"),
-  leadNotes: document.querySelector("#leadNotes"),
-  leadSummary: document.querySelector("#leadSummary"),
-  handoffStatus: document.querySelector("#handoffStatus"),
-  copyLead: document.querySelector("#copyLead"),
-  emailLead: document.querySelector("#emailLead"),
 };
 
 const PRETORIA_EAST = [
@@ -60,7 +42,6 @@ function parseCsv(text) {
   for (let i = 0; i < text.length; i += 1) {
     const char = text[i];
     const next = text[i + 1];
-
     if (char === '"' && quoted && next === '"') {
       value += '"';
       i += 1;
@@ -97,6 +78,19 @@ function normalise(value) {
   return String(value || "").toLowerCase().trim();
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/`/g, "&#096;");
+}
+
 function parseMoney(value) {
   const text = normalise(value).replace(/,/g, "");
   const million = text.match(/(\d+(?:\.\d+)?)\s*m\b/);
@@ -119,6 +113,55 @@ function formatBudget(value, intent) {
 
 function parseRefs(text) {
   return [...String(text || "").toUpperCase().matchAll(/\bAP\d+\b/g)].map((match) => match[0]);
+}
+
+function inferIntent(text) {
+  const value = normalise(text);
+  if (/\b(to rent|rental|rent|let)\b/.test(value)) {
+    return "rent";
+  }
+  if (/\b(buy|sale|for sale|purchase)\b/.test(value)) {
+    return "buy";
+  }
+  if (/\b(viewing|view|book|appointment)\b/.test(value)) {
+    return "viewing";
+  }
+  if (/\b(sell|seller|landlord|valuation|list my|letting)\b/.test(value)) {
+    return "sell";
+  }
+  return state.intent;
+}
+
+function inferArea(text) {
+  const value = normalise(text);
+  const known = [
+    "pretoria east",
+    "centurion",
+    "zwartkop",
+    "faerie glen",
+    "moreleta park",
+    "lynnwood ridge",
+    "hatfield",
+    "menlyn",
+    "cornwall hill",
+    "pierre van ryneveld",
+    "amberfield",
+    "waterkloof",
+    "brooklyn",
+    "fish hoek",
+  ];
+  return known.find((area) => value.includes(area)) || "";
+}
+
+function inferBeds(text) {
+  const value = normalise(text);
+  const match = value.match(/(\d+(?:\.\d+)?)\s*(bed|bedroom)/);
+  return match ? match[1] : "";
+}
+
+function inferType(text) {
+  const value = normalise(text);
+  return ["garden cottage", "townhouse", "apartment", "flat", "house", "freestanding"].find((type) => value.includes(type)) || "";
 }
 
 function phoneDigits(phone) {
@@ -180,111 +223,44 @@ function hasArea(row, area) {
   return text.includes(query);
 }
 
-function inferIntent(text) {
-  const value = normalise(text);
-  if (/\b(to rent|rental|rent|let)\b/.test(value)) {
-    return "rent";
-  }
-  if (/\b(buy|sale|for sale|purchase)\b/.test(value)) {
-    return "buy";
-  }
-  if (/\b(viewing|view|book|appointment)\b/.test(value)) {
-    return "viewing";
-  }
-  if (/\b(sell|seller|landlord|valuation|list my|letting)\b/.test(value)) {
-    return "sell";
-  }
-  return state.intent;
+function listingByRef(ref) {
+  return state.listings.find((row) => row.web_ref.toUpperCase() === String(ref || "").toUpperCase());
 }
 
-function hasExplicitIntent(text) {
-  const value = normalise(text);
-  return /\b(to rent|rental|rent|let|buy|sale|for sale|purchase|viewing|view|book|appointment|sell|seller|landlord|valuation|list my|letting)\b/.test(value);
-}
-
-function inferArea(text) {
-  const value = normalise(text);
-  const known = [
-    "pretoria east",
-    "centurion",
-    "zwartkop",
-    "faerie glen",
-    "moreleta park",
-    "lynnwood ridge",
-    "hatfield",
-    "menlyn",
-    "cornwall hill",
-    "pierre van ryneveld",
-    "amberfield",
-    "waterkloof",
-    "brooklyn",
-    "fish hoek",
-  ];
-  return known.find((area) => value.includes(area)) || "";
-}
-
-function inferBeds(text) {
-  const value = normalise(text);
-  const match = value.match(/(\d+(?:\.\d+)?)\s*(bed|bedroom)/);
-  return match ? match[1] : "";
-}
-
-function inferType(text) {
-  const value = normalise(text);
-  return ["garden cottage", "townhouse", "apartment", "flat", "house", "freestanding"].find((type) => value.includes(type)) || "";
-}
-
-function addMessage(role, message) {
-  if (!els.conversation || !message) {
-    return;
-  }
+function addMessage(role, text, child) {
   const node = document.createElement("div");
   node.className = `message ${role}`;
-  node.innerHTML = `<strong>${role === "user" ? "Visitor" : "Assistant"}</strong>${escapeHtml(message)}`;
+  if (text) {
+    node.innerHTML = `<p>${escapeHtml(text)}</p>`;
+  }
+  if (child) {
+    node.append(child);
+  }
   els.conversation.append(node);
   els.conversation.scrollTop = els.conversation.scrollHeight;
-}
-
-function note(message, options = {}) {
-  els.note.textContent = message;
-  if (options.log !== false) {
-    addMessage("assistant", message);
+  if (role === "assistant" || role === "system") {
+    els.note.textContent = text || "Response shown";
   }
 }
 
-function promptForIntent(intent) {
-  setIntent(intent);
-  if (intent === "rent") {
-    note("Great. Which area should I check first, and what is the maximum monthly rent?");
-    renderMessage("Next question", "Ask for area and budget before showing listings.");
-    return;
-  }
-  if (intent === "buy") {
-    note("Great. Which city or suburb should I check first, and what purchase budget should I stay under?");
-    renderMessage("Next question", "Ask for area and budget before showing listings.");
-    return;
-  }
-  if (intent === "viewing") {
-    note("Please send the Web Ref, name, phone or email, and preferred viewing time. The agent should approve the slot before final confirmation.");
-    renderMessage("Viewing request", "Use the handoff panel once the visitor supplies the Web Ref and contact details.");
-    return;
-  }
-  if (intent === "sell") {
-    note("For a seller or landlord lead, ask for property area, property type, sell/let timeline, name, and phone or email. Do not invent a valuation.");
-    renderMessage("Seller or landlord lead", "Prepare a valuation/listing follow-up for a human agent.");
-  }
+function setQuickReplies(replies) {
+  els.quickReplies.innerHTML = "";
+  replies.forEach((reply) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = reply.label;
+    button.dataset.prompt = reply.prompt;
+    els.quickReplies.append(button);
+  });
 }
 
-function coverageFor(area = "") {
-  const query = normalise(area);
-  const scoped = query ? state.listings.filter((row) => hasArea(row, query)) : state.listings;
-  const current = scoped.filter((row) => !isExcluded(row));
-  const rentCities = citySummary(current.filter((row) => row.intent === "rent"));
-  const buyCities = citySummary(current.filter((row) => row.intent === "buy"));
-  if (query) {
-    return `For ${area}, current source data shows rentals in ${rentCities || "no visible rental areas"} and sales in ${buyCities || "no visible sales areas"}. Are you looking to rent or buy, and what budget should I filter by?`;
-  }
-  return `Current source data is broader than Pretoria East. Rentals are visible in ${rentCities || "no visible rental areas"}. Sales are visible in ${buyCities || "no visible sales areas"}. Are you looking to rent or buy first?`;
+function defaultReplies() {
+  setQuickReplies([
+    { label: "Rent", prompt: "I want to rent" },
+    { label: "Buy", prompt: "I want to buy" },
+    { label: "Book viewing", prompt: "Book a viewing for AP17545" },
+    { label: "Sell/let", prompt: "I want to sell my property" },
+  ]);
 }
 
 function citySummary(rows) {
@@ -295,39 +271,24 @@ function citySummary(rows) {
   });
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 6)
+    .slice(0, 5)
     .map(([city, count]) => `${city} (${count})`)
     .join(", ");
 }
 
-function setIntent(intent) {
-  state.intent = intent;
-  document.querySelectorAll(".segment-button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.intent === intent);
-  });
+function coverageFor(area = "") {
+  const query = normalise(area);
+  const scoped = query ? state.listings.filter((row) => hasArea(row, query)) : state.listings;
+  const current = scoped.filter((row) => !isExcluded(row));
+  const rentCities = citySummary(current.filter((row) => row.intent === "rent"));
+  const buyCities = citySummary(current.filter((row) => row.intent === "buy"));
+  if (query) {
+    return `For ${area}, I can see rentals in ${rentCities || "no visible rental areas"} and sales in ${buyCities || "no visible sales areas"}. Are you looking to rent or buy there?`;
+  }
+  return `The source is broader than Pretoria East. Rentals are visible in ${rentCities || "no visible rental areas"}. Sales are visible in ${buyCities || "no visible sales areas"}. Are you looking to rent or buy first?`;
 }
 
-function listingByRef(ref) {
-  return state.listings.find((row) => row.web_ref.toUpperCase() === String(ref || "").toUpperCase());
-}
-
-function searchListings(filters = {}) {
-  const intent = filters.intent || state.intent;
-  const area = filters.area ?? els.areaInput.value;
-  const budget = filters.budget ?? parseMoney(els.budgetInput.value);
-  const beds = String(filters.beds ?? els.bedsInput.value).trim();
-  const type = normalise(filters.type ?? els.typeInput.value);
-
-  if (intent === "sell") {
-    note("I will not invent a valuation. Capture the property area, property type, timeline, name, and phone/email so an agent can follow up.");
-    return [];
-  }
-
-  if (intent === "viewing") {
-    note("For a viewing, capture Web Ref, name, contact details, and preferred time. The agent should approve the slot before the visitor receives final confirmation.");
-    return [];
-  }
-
+function searchListings({ intent, area, budget, beds, type }) {
   const rows = state.listings
     .filter((row) => row.intent === intent)
     .filter((row) => !isExcluded(row))
@@ -351,68 +312,15 @@ function searchListings(filters = {}) {
       }
       return rowText(row).includes(type);
     })
-    .sort((a, b) => {
-      const priceDiff = parseMoney(a.price) - parseMoney(b.price);
-      if (priceDiff !== 0) {
-        return priceDiff;
-      }
-      return a.web_ref.localeCompare(b.web_ref);
-    });
-
-  state.lastResults = rows.slice(0, 12);
-  const budgetLabel = formatBudget(budget, intent);
-  const context = [intent === "rent" ? "rentals" : "sales", area, budgetLabel, beds ? `${beds}+ bed` : "", type].filter(Boolean).join(", ");
-  if (rows.length) {
-    note(`I found ${rows.length} current ${context || "matches"} in the validated Apple Property index. Showing the strongest matches first.`);
-  } else {
-    const salesOnly = area && state.listings.some((row) => row.intent !== intent && hasArea(row, area));
-    if (salesOnly && intent === "rent") {
-      note(`I do not see a current rental match for ${area}. The source has sale or sold data there, so I will not present it as available rental stock. Capture the requirement for agent follow-up.`);
-    } else {
-      note("I do not see an exact current match in the source data. Capture the requirement and pass it to an agent for follow-up.");
-    }
-  }
+    .sort((a, b) => parseMoney(a.price) - parseMoney(b.price));
   return rows;
 }
 
-function renderListings(rows) {
-  els.results.innerHTML = "";
-  if (!rows.length) {
-    els.results.append(emptyState());
-    return;
-  }
-
-  rows.slice(0, 6).forEach((row) => els.results.append(listingCard(row)));
-}
-
-function emptyState() {
-  const node = document.createElement("div");
-  node.className = "empty-state";
-  node.innerHTML = `
-    <h2>No exact match visible</h2>
-    <p class="muted">Prepare a handoff with the visitor's area, budget, bedrooms, timeline, and contact details.</p>
-  `;
-  return node;
-}
-
-function renderMessage(title, message) {
-  els.results.innerHTML = "";
-  const node = document.createElement("div");
-  node.className = "empty-state";
-  node.innerHTML = `
-    <h2>${escapeHtml(title)}</h2>
-    <p class="muted">${escapeHtml(message)}</p>
-  `;
-  els.results.append(node);
-}
-
 function listingCard(row) {
-  const card = document.createElement("article");
+  const card = document.createElement("div");
   card.className = "listing-card";
   const wa = whatsappFor(row);
   const tel = telFor(row);
-  const available = row.availability || "Not stated";
-  const deposit = row.deposit || "Not stated";
   card.innerHTML = `
     <div class="listing-head">
       <h2 class="listing-title">${escapeHtml(row.title)}</h2>
@@ -423,290 +331,306 @@ function listingCard(row) {
     <div class="pill-row">
       <span class="pill">${escapeHtml(row.beds || "?")} bed</span>
       <span class="pill">${escapeHtml(row.baths || "?")} bath</span>
-      <span class="pill">Available ${escapeHtml(available)}</span>
-      <span class="pill">Deposit ${escapeHtml(deposit)}</span>
+      <span class="pill">Available ${escapeHtml(row.availability || "Not stated")}</span>
+      ${row.deposit ? `<span class="pill">Deposit ${escapeHtml(row.deposit)}</span>` : ""}
     </div>
     <p class="agent-line">Agent: ${escapeHtml(row.agent || "Not stated")}</p>
-    <div class="card-actions">
-      <a class="highlight" href="${escapeAttr(row.url)}" target="_blank" rel="noreferrer">Open</a>
+    <div class="listing-actions">
+      <a class="primary" href="${escapeAttr(row.url)}" target="_blank" rel="noreferrer">Open</a>
       <button type="button" data-action="details" data-ref="${escapeAttr(row.web_ref)}">Details</button>
-      <button type="button" data-action="compare" data-ref="${escapeAttr(row.web_ref)}">Compare</button>
       <button type="button" data-action="book" data-ref="${escapeAttr(row.web_ref)}">Book</button>
-      ${tel ? `<a href="${escapeAttr(tel)}">Call</a>` : "<span></span>"}
-      ${wa ? `<a href="${escapeAttr(wa)}" target="_blank" rel="noreferrer">WhatsApp</a>` : "<span></span>"}
+      ${tel ? `<a href="${escapeAttr(tel)}">Call</a>` : ""}
+      ${wa ? `<a href="${escapeAttr(wa)}" target="_blank" rel="noreferrer">WhatsApp</a>` : ""}
     </div>
   `;
   return card;
 }
 
-function renderDetails(ref) {
-  const row = listingByRef(ref);
-  if (!row || isExcluded(row)) {
-    note(`I do not see an available current listing for ${ref} in the validated source data.`);
-    renderListings([]);
+function showListings(rows, context) {
+  if (!rows.length) {
+    const message = context.salesOnly
+      ? `I do not see a current rental match for ${context.area}. The source has sale or sold data there, so I will not present it as available rental stock. I can still prepare a requirement for agent follow-up.`
+      : "I do not see an exact current match in the source data. I can still prepare the requirement for an agent to follow up.";
+    addMessage("assistant", message);
+    setQuickReplies([
+      { label: "Send to agent", prompt: `Please pass this ${context.intent || "property"} requirement to an agent` },
+      { label: "Try Pretoria East", prompt: "I want to rent in Pretoria East under R8000" },
+      { label: "Try Centurion", prompt: "I want to buy in Centurion under R2m" },
+    ]);
     return;
   }
-  note(`${row.web_ref}: ${row.title}. ${row.price}. ${row.suburb}, ${row.city}. Agent ${row.agent || "not stated"}.`);
-  renderListings([row]);
-  fillLeadRef(row.web_ref);
+
+  const stack = document.createElement("div");
+  stack.className = "listing-stack";
+  rows.slice(0, 3).forEach((row) => stack.append(listingCard(row)));
+  const intro = `I found ${rows.length} current ${context.intent === "rent" ? "rental" : "sale"} match${rows.length === 1 ? "" : "es"}. Here are the best options from the source data.`;
+  addMessage("assistant", intro, stack);
+
+  const replies = [
+    { label: `Book ${rows[0].web_ref}`, prompt: `Book a viewing for ${rows[0].web_ref}` },
+    { label: `Details ${rows[0].web_ref}`, prompt: `Tell me more about ${rows[0].web_ref}` },
+  ];
+  if (rows[1]) {
+    replies.push({ label: "Compare first two", prompt: `Compare ${rows[0].web_ref} and ${rows[1].web_ref}` });
+  }
+  replies.push({ label: "Refine search", prompt: `${context.intent} in ${context.area || "Pretoria East"} under ${context.budget ? formatBudget(context.budget, context.intent) : "R8000"}` });
+  setQuickReplies(replies);
 }
 
-function renderCompare() {
-  const rows = state.selectedRefs.map(listingByRef).filter(Boolean).filter((row) => !isExcluded(row));
-  if (rows.length < 2) {
-    note("Select two current Web Refs to compare.");
+function showDetails(ref) {
+  const row = listingByRef(ref);
+  if (!row || isExcluded(row)) {
+    addMessage("assistant", `I do not see an available current listing for ${ref} in the validated source data.`);
     return;
   }
-  const [a, b] = rows.slice(0, 2);
-  els.results.innerHTML = "";
-  const card = document.createElement("article");
+  addMessage("assistant", `${row.web_ref}: ${row.title}. ${row.price}. ${row.suburb}, ${row.city}. Agent ${row.agent || "not stated"}.`, listingCard(row));
+  setQuickReplies([
+    { label: `Book ${row.web_ref}`, prompt: `Book a viewing for ${row.web_ref}` },
+    { label: "WhatsApp agent", prompt: `I want to contact the agent for ${row.web_ref}` },
+    { label: "New search", prompt: "I want to rent" },
+  ]);
+}
+
+function showCompare(refs) {
+  const rows = refs.map(listingByRef).filter(Boolean).filter((row) => !isExcluded(row));
+  if (rows.length < 2) {
+    addMessage("assistant", "I need two current Web Refs to compare.");
+    return;
+  }
+  const [a, b] = rows;
+  const card = document.createElement("div");
   card.className = "compare-card";
   card.innerHTML = `
-    <h2>Compare ${escapeHtml(a.web_ref)} and ${escapeHtml(b.web_ref)}</h2>
-    <div class="compare-table">
-      ${compareRow("Title", a.title, b.title)}
+    <div class="compare-grid">
       ${compareRow("Price", a.price, b.price)}
       ${compareRow("Area", `${a.suburb}, ${a.city}`, `${b.suburb}, ${b.city}`)}
-      ${compareRow("Beds/Baths", `${a.beds || "?"} / ${a.baths || "?"}`, `${b.beds || "?"} / ${b.baths || "?"}`)}
+      ${compareRow("Beds", `${a.beds || "?"} bed`, `${b.beds || "?"} bed`)}
       ${compareRow("Available", a.availability || "Not stated", b.availability || "Not stated")}
-      ${compareRow("Deposit", a.deposit || "Not stated", b.deposit || "Not stated")}
       ${compareRow("Agent", a.agent || "Not stated", b.agent || "Not stated")}
     </div>
   `;
-  els.results.append(card);
-  note(`${a.web_ref} and ${b.web_ref} are both current source listings. Choose one to prepare a viewing request.`);
+  addMessage("assistant", `${a.web_ref} and ${b.web_ref} compared side by side.`, card);
+  setQuickReplies([
+    { label: `Book ${a.web_ref}`, prompt: `Book a viewing for ${a.web_ref}` },
+    { label: `Book ${b.web_ref}`, prompt: `Book a viewing for ${b.web_ref}` },
+    { label: "New search", prompt: "I want to rent" },
+  ]);
 }
 
 function compareRow(label, left, right) {
   return `<div class="compare-row"><span><strong>${escapeHtml(label)}</strong></span><span>${escapeHtml(left)}</span><span>${escapeHtml(right)}</span></div>`;
 }
 
-function fillLeadRef(ref) {
-  els.leadRef.value = ref;
-  const row = listingByRef(ref);
-  if (row) {
-    els.leadNotes.value = listingNote(row);
-  }
+function parseLead(text) {
+  const nameMatch = text.match(/(?:my name is|i am|i'm)\s+([a-z][a-z\s'-]{1,40})(?:\s+and|\s*,|$)/i);
+  const phoneMatch = text.match(/\b0\d{2}\s?\d{3}\s?\d{4}\b/);
+  const emailMatch = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  const timeMatch = text.match(/\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+(morning|afternoon|evening))?\b/i);
+  return {
+    name: nameMatch ? nameMatch[1].trim() : "",
+    contact: phoneMatch ? phoneMatch[0] : (emailMatch ? emailMatch[0] : ""),
+    time: timeMatch ? timeMatch[0] : "",
+  };
 }
 
-function listingNote(row) {
-  return `${row.title}, ${row.price}, ${row.suburb}. Agent: ${row.agent || "not stated"}.`;
+function showViewingRequest(ref, sourceText = "") {
+  const row = listingByRef(ref);
+  if (!row || isExcluded(row)) {
+    addMessage("assistant", `I do not see current available details for ${ref}. I can still ask an agent to follow up if you provide contact details.`);
+    return;
+  }
+  state.pendingViewingRef = row.web_ref;
+  const lead = parseLead(sourceText);
+  if (lead.name && lead.contact && lead.time) {
+    showHandoff(row, lead);
+    return;
+  }
+  addMessage("assistant", `I can request a viewing for ${row.web_ref}. Please send the visitor name, phone or email, and preferred viewing time. I will mark it as pending agent approval.`);
+  setQuickReplies([
+    { label: "Example details", prompt: `My name is Cameron and my phone is 082 123 4567. Tomorrow afternoon for ${row.web_ref}` },
+    { label: `Details ${row.web_ref}`, prompt: `Tell me more about ${row.web_ref}` },
+    { label: "New search", prompt: "I want to rent" },
+  ]);
 }
 
-function prepareLead() {
-  const ref = els.leadRef.value.trim().toUpperCase();
-  const row = listingByRef(ref);
-  let notes = els.leadNotes.value.trim();
-  const noteRefs = parseRefs(notes);
-  if (row && (!notes || (noteRefs.length && !noteRefs.includes(row.web_ref)))) {
-    notes = listingNote(row);
-    els.leadNotes.value = notes;
-  }
+function showHandoff(row, lead) {
   const summary = [
-    "Apple Property lead handoff",
-    row ? `Listing: ${row.web_ref} - ${row.title}` : `Listing/Web Ref: ${ref || "Not supplied"}`,
-    row ? `Price/area: ${row.price}, ${row.suburb}, ${row.city}` : "",
-    row ? `Agent: ${row.agent || "Not stated"} ${firstMobile(row) || ""}`.trim() : "",
-    `Visitor: ${els.leadName.value.trim() || "Missing"}`,
-    `Contact: ${els.leadContact.value.trim() || "Missing"}`,
-    `Preferred time: ${els.leadTime.value.trim() || "Missing"}`,
-    `Notes: ${notes || "None"}`,
+    `Listing: ${row.web_ref} - ${row.title}`,
+    `Price/area: ${row.price}, ${row.suburb}, ${row.city}`,
+    `Agent: ${row.agent || "Not stated"} ${firstMobile(row) || ""}`.trim(),
+    `Visitor: ${lead.name || "Missing"}`,
+    `Contact: ${lead.contact || "Missing"}`,
+    `Preferred time: ${lead.time || "Missing"}`,
     "Status: pending agent approval before visitor confirmation",
-  ].filter(Boolean).join("\n");
-  els.leadSummary.textContent = summary;
-  els.leadSummary.classList.add("active");
-  els.handoffStatus.textContent = "Ready";
-  els.handoffStatus.classList.add("ready");
-  els.emailLead.href = `mailto:agent@vanrooyen.tech?subject=${encodeURIComponent(`Apple Property lead ${ref || ""}`)}&body=${encodeURIComponent(summary)}`;
-  note("Lead summary prepared. The next operational step is agent approval before confirming the viewing time to the visitor.");
+  ].join("\n");
+  const card = document.createElement("div");
+  card.className = "handoff-card";
+  card.innerHTML = `
+    <strong>Viewing request ready for handoff</strong>
+    <pre>${escapeHtml(summary)}</pre>
+    <div class="handoff-actions">
+      <button type="button" data-action="copy" data-summary="${escapeAttr(summary)}">Copy</button>
+      <a class="primary" href="mailto:agent@vanrooyen.tech?subject=${encodeURIComponent(`Apple Property lead ${row.web_ref}`)}&body=${encodeURIComponent(summary)}">Email</a>
+    </div>
+  `;
+  addMessage("assistant", "I have the viewing request details. The next step is agent approval before confirming the slot to the visitor.", card);
+  setQuickReplies([
+    { label: "Another viewing", prompt: "Book a viewing for AP21733" },
+    { label: "New rental search", prompt: "I want to rent in Pretoria East under R8000" },
+    { label: "Seller lead", prompt: "I want to sell my property" },
+  ]);
 }
 
-function handleAsk(text) {
+function showSellerFlow() {
+  addMessage("assistant", "I can prepare a seller or landlord lead, but I will not invent a valuation. Please collect property area, property type, sell or let timeline, name, and phone or email.");
+  setQuickReplies([
+    { label: "Pretoria East house", prompt: "House in Pretoria East, selling in 3 months, Cameron, 082 123 4567" },
+    { label: "Landlord lead", prompt: "I want to let out my apartment in Hatfield" },
+    { label: "Back to listings", prompt: "I want to rent" },
+  ]);
+}
+
+function handlePrompt(text) {
   const value = normalise(text);
   const refs = parseRefs(text);
 
   if (value.includes("bond") && value.includes("guarantee")) {
-    note("I cannot guarantee bond approval. Approval depends on lender checks and the buyer's financial profile. Offer a human or bond-specialist follow-up.");
-    renderListings([]);
+    addMessage("assistant", "I cannot guarantee bond approval. Approval depends on lender checks and the buyer's financial profile. I can offer a human or bond-specialist follow-up.");
     return;
   }
 
   if (value.includes("not looking for") && (value.includes("retirement") || value.includes("assisted"))) {
     state.includeRetirement = false;
-    els.includeRetirement.checked = false;
-    note("Retirement and assisted-living listings are now excluded for this conversation.");
+    addMessage("assistant", "Understood. I will exclude retirement and assisted-living listings from this conversation.");
+    return;
   }
 
   if (value.includes("retirement") && !value.includes("not looking for")) {
     state.includeRetirement = true;
-    els.includeRetirement.checked = true;
   }
 
   if (value.includes("other areas") || value.includes("areas besides") || value.includes("areas do you cover")) {
-    note(coverageFor());
-    renderMessage("Choose rent or buy", "Select the search intent first, then add area, budget, and bedrooms.");
+    addMessage("assistant", coverageFor());
+    setQuickReplies([
+      { label: "Rent Pretoria", prompt: "I want to rent in Pretoria under R10000" },
+      { label: "Buy Centurion", prompt: "I want to buy in Centurion under R2m" },
+      { label: "Book viewing", prompt: "Book a viewing for AP17545" },
+    ]);
     return;
   }
 
+  if ((value.includes("book") || value.includes("viewing") || value.includes("view")) && refs[0]) {
+    showViewingRequest(refs[0], text);
+    return;
+  }
+
+  if (state.pendingViewingRef && (value.includes("phone") || /\b0\d{2}\s?\d{3}\s?\d{4}\b/.test(value))) {
+    const row = listingByRef(state.pendingViewingRef);
+    if (row) {
+      showHandoff(row, parseLead(text));
+      return;
+    }
+  }
+
   if (refs.length >= 2 || value.startsWith("compare")) {
-    state.selectedRefs = refs.slice(0, 2);
-    renderCompare();
+    showCompare(refs);
     return;
   }
 
   if (refs.length === 1) {
-    if (value.includes("book") || value.includes("view")) {
-      fillLeadRef(refs[0]);
-      setIntent("viewing");
-      note(`I can prepare a viewing request for ${refs[0]}. Capture name, contact details, and preferred time, then send it to the agent for approval.`);
-      renderDetails(refs[0]);
-      return;
-    }
-    renderDetails(refs[0]);
+    showDetails(refs[0]);
     return;
   }
 
   const intent = inferIntent(text);
-  setIntent(intent);
-
   if (intent === "sell") {
-    note("For seller or landlord leads, capture property area, property type, sell/let timeline, name, and phone/email. Do not invent a valuation.");
-    renderMessage("Seller or landlord lead", "Capture area, property type, timeline, name, and contact details for an agent valuation/listing follow-up.");
+    state.intent = "sell";
+    showSellerFlow();
     return;
   }
 
-  const area = inferArea(text) || els.areaInput.value;
-  const budget = parseMoney(text) || parseMoney(els.budgetInput.value);
-  const beds = inferBeds(text) || els.bedsInput.value;
-  const type = inferType(text) || els.typeInput.value;
-
-  if (area && !hasExplicitIntent(text) && !budget && !beds && !type) {
-    els.areaInput.value = area;
-    note(coverageFor(area));
-    renderMessage("Choose rent or buy", "Select the search intent first, then add budget and bedrooms for this area.");
+  if (intent === "viewing") {
+    state.intent = "viewing";
+    addMessage("assistant", "Please send the Web Ref for the property, plus the visitor name, contact details, and preferred viewing time.");
     return;
   }
 
-  els.areaInput.value = area;
-  els.budgetInput.value = budget ? String(budget) : "";
-  els.bedsInput.value = beds;
-  els.typeInput.value = [...els.typeInput.options].some((option) => option.value === type) ? type : "";
+  if (intent === "rent" || intent === "buy") {
+    state.intent = intent;
+    const area = inferArea(text);
+    const budget = parseMoney(text);
+    const beds = inferBeds(text);
+    const type = inferType(text);
 
-  const rows = searchListings({ intent, area, budget, beds, type });
-  renderListings(rows);
-}
+    if (!area) {
+      addMessage("assistant", intent === "rent" ? "Which area should I check first, and what is the maximum monthly rent?" : "Which city or suburb should I check first, and what purchase budget should I stay under?");
+      setQuickReplies([
+        { label: "Pretoria East", prompt: `${intent} in Pretoria East under ${intent === "rent" ? "R8000" : "R2m"}` },
+        { label: "Centurion", prompt: `${intent} in Centurion under ${intent === "rent" ? "R10000" : "R2m"}` },
+        { label: "Hatfield", prompt: `${intent} in Hatfield under ${intent === "rent" ? "R9000" : "R1m"}` },
+      ]);
+      return;
+    }
 
-function escapeHtml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
+    if (!budget && !beds && !type && !/\bunder\b/.test(value)) {
+      addMessage("assistant", coverageFor(area));
+      setQuickReplies([
+        { label: "Rent there", prompt: `rent in ${area} under R10000` },
+        { label: "Buy there", prompt: `buy in ${area} under R2m` },
+        { label: "Different area", prompt: "Any other areas besides Pretoria east?" },
+      ]);
+      return;
+    }
 
-function escapeAttr(value) {
-  return escapeHtml(value).replace(/`/g, "&#096;");
+    const rows = searchListings({ intent, area, budget, beds, type });
+    const salesOnly = area && intent === "rent" && state.listings.some((row) => row.intent !== "rent" && hasArea(row, area));
+    showListings(rows, { intent, area, budget, beds, type, salesOnly });
+    return;
+  }
+
+  addMessage("assistant", "I can help with renting, buying, booking a viewing, or seller/landlord follow-up. Which one should we start with?");
+  defaultReplies();
 }
 
 function bindEvents() {
-  document.querySelectorAll(".segment-button").forEach((button) => {
-    button.addEventListener("click", () => {
-      addMessage("user", button.textContent.trim());
-      promptForIntent(button.dataset.intent);
-    });
-  });
-
-  document.querySelectorAll("[data-prompt]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const prompt = button.dataset.prompt;
-      els.askInput.value = prompt;
-      addMessage("user", prompt);
-      handleAsk(prompt);
-      els.askInput.value = "";
-    });
-  });
-
-  document.querySelectorAll(".area-chips button").forEach((button) => {
-    button.addEventListener("click", () => {
-      els.areaInput.value = button.dataset.area;
-      addMessage("user", button.dataset.area);
-      renderListings(searchListings());
-    });
-  });
-
-  els.filterForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    state.includeRetirement = els.includeRetirement.checked;
-    addMessage("user", `Check ${state.intent} in ${els.areaInput.value || "any area"}`);
-    renderListings(searchListings());
-  });
-
-  els.includeRetirement.addEventListener("change", () => {
-    state.includeRetirement = els.includeRetirement.checked;
-    renderListings(searchListings());
-  });
-
   els.askForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const text = els.askInput.value.trim();
-    if (text) {
-      addMessage("user", text);
-      handleAsk(text);
-      els.askInput.value = "";
-    }
-  });
-
-  els.results.addEventListener("click", (event) => {
-    const target = event.target.closest("[data-action]");
-    if (!target) {
-      return;
-    }
-    const ref = target.dataset.ref;
-    if (target.dataset.action === "details") {
-      addMessage("user", `Details ${ref}`);
-      renderDetails(ref);
-    }
-    if (target.dataset.action === "book") {
-      addMessage("user", `Book viewing ${ref}`);
-      fillLeadRef(ref);
-      setIntent("viewing");
-      note(`Viewing request started for ${ref}. Add name, contact details, and preferred time.`);
-    }
-    if (target.dataset.action === "compare") {
-      addMessage("user", `Compare ${ref}`);
-      state.selectedRefs = [...new Set([...state.selectedRefs, ref])].slice(-2);
-      renderCompare();
-    }
-  });
-
-  els.clearCompare.addEventListener("click", () => {
-    state.selectedRefs = [];
-    renderListings(state.lastResults.length ? state.lastResults : searchListings());
-    note("Comparison cleared.");
-  });
-
-  els.leadForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    addMessage("user", "Prepare the lead handoff");
-    prepareLead();
-  });
-
-  els.leadRef.addEventListener("change", () => {
-    const ref = els.leadRef.value.trim().toUpperCase();
-    if (listingByRef(ref)) {
-      fillLeadRef(ref);
-    }
-  });
-
-  els.copyLead.addEventListener("click", async () => {
-    const text = els.leadSummary.textContent.trim();
     if (!text) {
-      note("Prepare a handoff before copying.");
       return;
     }
-    await navigator.clipboard.writeText(text);
-    note("Lead summary copied.");
+    addMessage("user", text);
+    els.askInput.value = "";
+    handlePrompt(text);
+  });
+
+  els.quickReplies.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-prompt]");
+    if (!button) {
+      return;
+    }
+    const prompt = button.dataset.prompt;
+    addMessage("user", prompt);
+    handlePrompt(prompt);
+  });
+
+  els.conversation.addEventListener("click", async (event) => {
+    const action = event.target.closest("[data-action]");
+    if (!action) {
+      return;
+    }
+    if (action.dataset.action === "details") {
+      addMessage("user", `Tell me more about ${action.dataset.ref}`);
+      showDetails(action.dataset.ref);
+    }
+    if (action.dataset.action === "book") {
+      addMessage("user", `Book a viewing for ${action.dataset.ref}`);
+      showViewingRequest(action.dataset.ref);
+    }
+    if (action.dataset.action === "copy") {
+      await navigator.clipboard.writeText(action.dataset.summary || "");
+      addMessage("system", "Lead summary copied.");
+    }
   });
 }
 
@@ -720,13 +644,11 @@ async function init() {
     const text = await response.text();
     state.listings = parseCsv(text).map((row) => ({ ...row, web_ref: row.web_ref.toUpperCase() }));
     els.listingCount.textContent = `${state.listings.length} listings`;
-    note("Hi. I can help qualify a buyer, renter, seller, landlord, or viewing lead. Start with rent, buy, viewing, or sell/let.", { log: false });
-    addMessage("assistant", "Hi. I can help qualify a buyer, renter, seller, landlord, or viewing lead. Start with rent, buy, viewing, or sell/let.");
-    renderMessage("Waiting for visitor intent", "Choose one of the assistant actions above, or type a natural request such as: rent in Faerie Glen under R8,000.");
+    addMessage("assistant", "Hi - I can help you find Apple Property listings, book a viewing, contact an agent, or request a seller/landlord valuation. Are you looking to rent, buy, sell/list, or book a viewing?");
+    defaultReplies();
   } catch (error) {
     els.listingCount.textContent = "Data error";
-    note(error.message);
-    renderListings([]);
+    addMessage("assistant", error.message);
   }
 }
 
